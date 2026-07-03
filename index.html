@@ -94,6 +94,7 @@
       margin-top:14px;
       font-weight:bold;
       min-height:28px;
+      word-break:break-word;
     }
 
     .small{
@@ -170,6 +171,8 @@ function verificarEnter(event){
 function chamarAPI(params, callback){
   const cb = "sigac_cb_" + Date.now();
 
+  const script = document.createElement("script");
+
   window[cb] = function(res){
     callback(res);
     delete window[cb];
@@ -177,6 +180,7 @@ function chamarAPI(params, callback){
   };
 
   params.callback = cb;
+  params._ = Date.now();
 
   const query = Object.keys(params)
     .map(function(k){
@@ -184,7 +188,15 @@ function chamarAPI(params, callback){
     })
     .join("&");
 
-  const script = document.createElement("script");
+  script.onerror = function(){
+    callback({
+      sucesso:false,
+      mensagem:"Falha ao comunicar com o Apps Script."
+    });
+    delete window[cb];
+    script.remove();
+  };
+
   script.src = API_URL + "?" + query;
   document.body.appendChild(script);
 }
@@ -332,6 +344,19 @@ function pararScanner(){
   mensagem("Scanner parado.", "info");
 }
 
+function extrairIDDoQR(texto){
+  let id = String(texto || "").trim();
+
+  if(id.startsWith("http")){
+    try{
+      const url = new URL(id);
+      id = url.searchParams.get("id") || id;
+    }catch(e){}
+  }
+
+  return id;
+}
+
 function processarQR(texto){
   if(bloqueado){
     return;
@@ -339,14 +364,14 @@ function processarQR(texto){
 
   bloqueado = true;
 
-  const id = String(texto).trim();
+  const id = extrairIDDoQR(texto);
   const token = localStorage.getItem("sigac_token_externo");
 
   if(navigator.vibrate){
     navigator.vibrate(120);
   }
 
-  mensagem("Registrando ID " + id + "...", "info");
+  mensagem("QR lido: " + id + " | Registrando...", "info");
 
   chamarAPI({
     api:"registrar",
@@ -355,8 +380,17 @@ function processarQR(texto){
   }, function(res){
 
     if(!res.sucesso){
-      mensagem("❌ " + res.mensagem, "err");
-    } else if(res.tipo === "ENTRADA"){
+      mensagem("❌ " + (res.mensagem || "Erro desconhecido."), "err");
+
+      setTimeout(function(){
+        bloqueado = false;
+        mensagem("Pronto para nova leitura.", "info");
+      }, 3000);
+
+      return;
+    }
+
+    if(res.tipo === "ENTRADA"){
       mensagem("🟢 ENTRADA registrada com sucesso.", "ok");
     } else {
       mensagem("🔴 SAÍDA registrada com sucesso.", "ok");
