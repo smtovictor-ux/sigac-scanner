@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#07111f">
 
-  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
 
   <style>
     *{box-sizing:border-box;font-family:Arial, Helvetica, sans-serif}
@@ -41,7 +41,7 @@
       border:1px solid #263244;
     }
 
-    input,button,select{
+    input,button{
       width:100%;
       padding:14px;
       margin:8px 0;
@@ -50,7 +50,7 @@
       font-size:16px;
     }
 
-    input,select{
+    input{
       background:#0b1220;
       color:white;
       border:1px solid #263244;
@@ -79,14 +79,12 @@
       color:#ffd54f;
     }
 
-    video{
+    #reader{
       width:100%;
-      max-height:420px;
       margin-top:18px;
       background:#000;
       border-radius:12px;
-      border:1px solid #263244;
-      object-fit:cover;
+      overflow:hidden;
     }
 
     #msg,
@@ -127,11 +125,7 @@
 
     <div id="operador"></div>
 
-    <select id="listaCameras">
-      <option value="">Carregando câmeras...</option>
-    </select>
-
-    <video id="video" muted playsinline></video>
+    <div id="reader"></div>
 
     <button onclick="iniciarScanner()">▶ Iniciar Scanner</button>
     <button onclick="pararScanner()">⏹ Parar Scanner</button>
@@ -147,14 +141,11 @@
 <script>
 const API_URL = "https://script.google.com/macros/s/AKfycbwJB39R7TWeHcMNkQcYwnV-7JpgjO8pgEcxrsdY1jU0vkJRZFGu5YbLz4GPmIVL-5VC/exec";
 
-let leitor = null;
+let scanner = null;
 let scannerAtivo = false;
 let bloqueado = false;
-let cameras = [];
 
 window.onload = function(){
-  leitor = new ZXing.BrowserQRCodeReader();
-
   const token = localStorage.getItem("sigac_token_externo");
 
   if(token){
@@ -193,6 +184,7 @@ function chamarAPI(params, callback){
       sucesso:false,
       mensagem:"Falha ao comunicar com o Apps Script."
     });
+
     delete window[cb];
     script.remove();
   };
@@ -251,55 +243,6 @@ function abrirScanner(usuario){
 
   document.getElementById("operador").innerHTML =
     "Operador: <b>" + usuario.nome + "</b> | Perfil: " + usuario.perfil;
-
-  carregarCameras();
-}
-
-function carregarCameras(){
-  mensagem("Carregando câmeras...", "info");
-
-  leitor.listVideoInputDevices()
-    .then(function(dispositivos){
-      cameras = dispositivos || [];
-
-      const select = document.getElementById("listaCameras");
-      select.innerHTML = "";
-
-      if(cameras.length === 0){
-        select.innerHTML = "<option value=''>Nenhuma câmera encontrada</option>";
-        mensagem("Nenhuma câmera encontrada.", "err");
-        return;
-      }
-
-      let cameraPreferida = "";
-
-      cameras.forEach(function(cam, index){
-        const opt = document.createElement("option");
-        opt.value = cam.deviceId;
-        opt.text = cam.label || ("Câmera " + (index + 1));
-        select.appendChild(opt);
-
-        const label = (cam.label || "").toLowerCase();
-
-        if(
-          label.includes("back") ||
-          label.includes("rear") ||
-          label.includes("environment") ||
-          label.includes("traseira")
-        ){
-          cameraPreferida = cam.deviceId;
-        }
-      });
-
-      if(cameraPreferida){
-        select.value = cameraPreferida;
-      }
-
-      mensagem("Câmeras prontas. Clique em Iniciar Scanner.", "ok");
-    })
-    .catch(function(err){
-      mensagem("Erro ao carregar câmeras: " + err, "err");
-    });
 }
 
 function iniciarScanner(){
@@ -307,23 +250,23 @@ function iniciarScanner(){
     return;
   }
 
-  const cameraId = document.getElementById("listaCameras").value;
+  scanner = new Html5Qrcode("reader");
 
-  if(!cameraId){
-    mensagem("Selecione uma câmera.", "err");
-    return;
-  }
+  mensagem("Solicitando câmera...", "info");
 
-  mensagem("Iniciando câmera...", "info");
-
-  leitor.decodeFromVideoDevice(
-    cameraId,
-    "video",
-    function(resultado, erro){
-      if(resultado){
-        processarQR(resultado.getText());
+  scanner.start(
+    { facingMode: "environment" },
+    {
+      fps: 10,
+      qrbox: {
+        width: 250,
+        height: 250
       }
-    }
+    },
+    function(decodedText){
+      processarQR(decodedText);
+    },
+    function(errorMessage){}
   )
   .then(function(){
     scannerAtivo = true;
@@ -335,13 +278,19 @@ function iniciarScanner(){
 }
 
 function pararScanner(){
-  if(!leitor){
+  if(!scanner || !scannerAtivo){
     return;
   }
 
-  leitor.reset();
-  scannerAtivo = false;
-  mensagem("Scanner parado.", "info");
+  scanner.stop()
+    .then(function(){
+      scanner.clear();
+      scannerAtivo = false;
+      mensagem("Scanner parado.", "info");
+    })
+    .catch(function(err){
+      mensagem("Erro ao parar scanner: " + err, "err");
+    });
 }
 
 function extrairIDDoQR(texto){
@@ -404,7 +353,10 @@ function processarQR(texto){
 }
 
 function sair(){
-  pararScanner();
+  if(scannerAtivo){
+    pararScanner();
+  }
+
   localStorage.clear();
   location.reload();
 }
