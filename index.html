@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>SIGAC Scanner</title>
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#07111f">
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    *{box-sizing:border-box;font-family:Arial, Helvetica, sans-serif}
+
+    body{
+      margin:0;
+      background:#0b111c;
+      color:white;
+      text-align:center;
+    }
+
+    header{
+      padding:18px;
+      background:#07111f;
+      font-size:22px;
+      font-weight:bold;
+    }
+
+    .box{
+      max-width:520px;
+      margin:25px auto;
+      padding:20px;
+    }
+
+    .card{
+      background:#111827;
+      border-radius:18px;
+      padding:20px;
+      border:1px solid #263244;
+    }
+
+    input,button{
+      width:100%;
+      padding:14px;
+      margin:8px 0;
+      border-radius:10px;
+      border:none;
+      font-size:16px;
+    }
+
+    input{
+      background:#0b1220;
+      color:white;
+      border:1px solid #263244;
+    }
+
+    button{
+      background:#1565c0;
+      color:white;
+      font-weight:bold;
+      cursor:pointer;
+    }
+
+    .danger{
+      background:#b91c1c;
+    }
+
+    .ok{
+      color:#00e676;
+    }
+
+    .err{
+      color:#ff5252;
+    }
+
+    .info{
+      color:#ffd54f;
+    }
+
+    #reader{
+      margin-top:18px;
+      background:#000;
+      border-radius:12px;
+      overflow:hidden;
+    }
+
+    #msg,
+    #loginMsg{
+      margin-top:14px;
+      font-weight:bold;
+      min-height:28px;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>📷 SIGAC Scanner</header>
+
+<div class="box">
+
+  <div id="loginBox" class="card">
+    <h2>Login do Operador</h2>
+
+    <input id="usuario" placeholder="Usuário">
+    <input id="senha" type="password" placeholder="Senha" onkeydown="verificarEnter(event)">
+
+    <button onclick="login()">Entrar</button>
+
+    <div id="loginMsg"></div>
+  </div>
+
+  <div id="scannerBox" class="card" style="display:none;">
+    <h2>Scanner QR Code</h2>
+
+    <div id="operador"></div>
+
+    <div id="reader"></div>
+
+    <button onclick="iniciarScanner()">▶ Iniciar Scanner</button>
+    <button onclick="pararScanner()">⏹ Parar Scanner</button>
+    <button class="danger" onclick="sair()">🚪 Sair</button>
+
+    <div id="msg">Pronto.</div>
+  </div>
+
+</div>
+
+<script>
+const API_URL = "https://script.google.com/macros/s/AKfycbwJB39R7TWeHcMNkQcYwnV-7JpgjO8pgEcxrsdY1jU0vkJRZFGu5YbLz4GPmIVL-5VC/exec";
+
+let html5QrCode = null;
+let scannerAtivo = false;
+let bloqueado = false;
+
+window.onload = function(){
+  const token = localStorage.getItem("sigac_token_externo");
+
+  if(token){
+    validarToken(token);
+  }
+};
+
+function verificarEnter(event){
+  if(event.key === "Enter"){
+    login();
+  }
+}
+
+function chamarAPI(params, callback){
+  const cb = "sigac_cb_" + Date.now();
+
+  window[cb] = function(res){
+    callback(res);
+    delete window[cb];
+    script.remove();
+  };
+
+  params.callback = cb;
+
+  const query = Object.keys(params)
+    .map(function(k){
+      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+    })
+    .join("&");
+
+  const script = document.createElement("script");
+  script.src = API_URL + "?" + query;
+  document.body.appendChild(script);
+}
+
+function login(){
+  const usuario = document.getElementById("usuario").value.trim();
+  const senha = document.getElementById("senha").value.trim();
+
+  if(!usuario || !senha){
+    mostrarLogin("Informe usuário e senha.", "err");
+    return;
+  }
+
+  mostrarLogin("Validando...", "info");
+
+  chamarAPI({
+    api:"login",
+    usuario:usuario,
+    senha:senha
+  }, function(res){
+
+    if(!res.sucesso){
+      mostrarLogin(res.mensagem || "Acesso negado.", "err");
+      return;
+    }
+
+    localStorage.setItem("sigac_token_externo", res.token);
+    localStorage.setItem("sigac_usuario_externo", JSON.stringify(res.usuario));
+
+    abrirScanner(res.usuario);
+  });
+}
+
+function validarToken(token){
+  chamarAPI({
+    api:"validar",
+    token:token
+  }, function(res){
+
+    if(!res.logado){
+      localStorage.clear();
+      return;
+    }
+
+    abrirScanner(res.usuario);
+  });
+}
+
+function abrirScanner(usuario){
+  document.getElementById("loginBox").style.display = "none";
+  document.getElementById("scannerBox").style.display = "block";
+
+  document.getElementById("operador").innerHTML =
+    "Operador: <b>" + usuario.nome + "</b> | Perfil: " + usuario.perfil;
+}
+
+function iniciarScanner(){
+  if(scannerAtivo){
+    return;
+  }
+
+  html5QrCode = new Html5Qrcode("reader");
+
+  mensagem("Solicitando câmera...", "info");
+
+  html5QrCode.start(
+    { facingMode: "environment" },
+    {
+      fps:10,
+      qrbox:{
+        width:250,
+        height:250
+      }
+    },
+    function(decodedText){
+      processarQR(decodedText);
+    },
+    function(){}
+  )
+  .then(function(){
+    scannerAtivo = true;
+    mensagem("Scanner ativo. Aponte para o QR Code.", "ok");
+  })
+  .catch(function(err){
+    mensagem("Erro ao abrir câmera: " + err, "err");
+  });
+}
+
+function pararScanner(){
+  if(!scannerAtivo || !html5QrCode){
+    return;
+  }
+
+  html5QrCode.stop()
+    .then(function(){
+      scannerAtivo = false;
+      mensagem("Scanner parado.", "info");
+    });
+}
+
+function processarQR(texto){
+  if(bloqueado){
+    return;
+  }
+
+  bloqueado = true;
+
+  const id = String(texto).trim();
+  const token = localStorage.getItem("sigac_token_externo");
+
+  mensagem("Registrando ID " + id + "...", "info");
+
+  chamarAPI({
+    api:"registrar",
+    id:id,
+    token:token
+  }, function(res){
+
+    if(!res.sucesso){
+      mensagem("❌ " + res.mensagem, "err");
+    } else if(res.tipo === "ENTRADA"){
+      mensagem("🟢 ENTRADA registrada com sucesso.", "ok");
+    } else {
+      mensagem("🔴 SAÍDA registrada com sucesso.", "ok");
+    }
+
+    setTimeout(function(){
+      bloqueado = false;
+      mensagem("Pronto para nova leitura.", "info");
+    }, 3000);
+  });
+}
+
+function sair(){
+  localStorage.clear();
+  location.reload();
+}
+
+function mostrarLogin(texto, tipo){
+  const el = document.getElementById("loginMsg");
+  el.className = tipo;
+  el.innerHTML = texto;
+}
+
+function mensagem(texto, tipo){
+  const el = document.getElementById("msg");
+  el.className = tipo;
+  el.innerHTML = texto;
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+
+</body>
+</html>
