@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#07111f">
 
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
 
   <style>
     *{box-sizing:border-box;font-family:Arial, Helvetica, sans-serif}
@@ -41,7 +41,7 @@
       border:1px solid #263244;
     }
 
-    input,button{
+    input,button,select{
       width:100%;
       padding:14px;
       margin:8px 0;
@@ -50,7 +50,7 @@
       font-size:16px;
     }
 
-    input{
+    input,select{
       background:#0b1220;
       color:white;
       border:1px solid #263244;
@@ -79,11 +79,14 @@
       color:#ffd54f;
     }
 
-    #reader{
+    video{
+      width:100%;
+      max-height:420px;
       margin-top:18px;
       background:#000;
       border-radius:12px;
-      overflow:hidden;
+      border:1px solid #263244;
+      object-fit:cover;
     }
 
     #msg,
@@ -91,6 +94,12 @@
       margin-top:14px;
       font-weight:bold;
       min-height:28px;
+    }
+
+    .small{
+      color:#9fb0c6;
+      font-size:13px;
+      margin-top:8px;
     }
   </style>
 </head>
@@ -117,11 +126,17 @@
 
     <div id="operador"></div>
 
-    <div id="reader"></div>
+    <select id="listaCameras">
+      <option value="">Carregando câmeras...</option>
+    </select>
+
+    <video id="video" muted playsinline></video>
 
     <button onclick="iniciarScanner()">▶ Iniciar Scanner</button>
     <button onclick="pararScanner()">⏹ Parar Scanner</button>
     <button class="danger" onclick="sair()">🚪 Sair</button>
+
+    <div class="small">O QR Code deve conter apenas o ID do militar.</div>
 
     <div id="msg">Pronto.</div>
   </div>
@@ -131,11 +146,14 @@
 <script>
 const API_URL = "https://script.google.com/macros/s/AKfycbwJB39R7TWeHcMNkQcYwnV-7JpgjO8pgEcxrsdY1jU0vkJRZFGu5YbLz4GPmIVL-5VC/exec";
 
-let html5QrCode = null;
+let leitor = null;
 let scannerAtivo = false;
 let bloqueado = false;
+let cameras = [];
 
 window.onload = function(){
+  leitor = new ZXing.BrowserQRCodeReader();
+
   const token = localStorage.getItem("sigac_token_externo");
 
   if(token){
@@ -221,6 +239,55 @@ function abrirScanner(usuario){
 
   document.getElementById("operador").innerHTML =
     "Operador: <b>" + usuario.nome + "</b> | Perfil: " + usuario.perfil;
+
+  carregarCameras();
+}
+
+function carregarCameras(){
+  mensagem("Carregando câmeras...", "info");
+
+  leitor.listVideoInputDevices()
+    .then(function(dispositivos){
+      cameras = dispositivos || [];
+
+      const select = document.getElementById("listaCameras");
+      select.innerHTML = "";
+
+      if(cameras.length === 0){
+        select.innerHTML = "<option value=''>Nenhuma câmera encontrada</option>";
+        mensagem("Nenhuma câmera encontrada.", "err");
+        return;
+      }
+
+      let cameraPreferida = "";
+
+      cameras.forEach(function(cam, index){
+        const opt = document.createElement("option");
+        opt.value = cam.deviceId;
+        opt.text = cam.label || ("Câmera " + (index + 1));
+        select.appendChild(opt);
+
+        const label = (cam.label || "").toLowerCase();
+
+        if(
+          label.includes("back") ||
+          label.includes("rear") ||
+          label.includes("environment") ||
+          label.includes("traseira")
+        ){
+          cameraPreferida = cam.deviceId;
+        }
+      });
+
+      if(cameraPreferida){
+        select.value = cameraPreferida;
+      }
+
+      mensagem("Câmeras prontas. Clique em Iniciar Scanner.", "ok");
+    })
+    .catch(function(err){
+      mensagem("Erro ao carregar câmeras: " + err, "err");
+    });
 }
 
 function iniciarScanner(){
@@ -228,23 +295,23 @@ function iniciarScanner(){
     return;
   }
 
-  html5QrCode = new Html5Qrcode("reader");
+  const cameraId = document.getElementById("listaCameras").value;
 
-  mensagem("Solicitando câmera...", "info");
+  if(!cameraId){
+    mensagem("Selecione uma câmera.", "err");
+    return;
+  }
 
-  html5QrCode.start(
-    { facingMode: "environment" },
-    {
-      fps:10,
-      qrbox:{
-        width:250,
-        height:250
+  mensagem("Iniciando câmera...", "info");
+
+  leitor.decodeFromVideoDevice(
+    cameraId,
+    "video",
+    function(resultado, erro){
+      if(resultado){
+        processarQR(resultado.getText());
       }
-    },
-    function(decodedText){
-      processarQR(decodedText);
-    },
-    function(){}
+    }
   )
   .then(function(){
     scannerAtivo = true;
@@ -256,15 +323,13 @@ function iniciarScanner(){
 }
 
 function pararScanner(){
-  if(!scannerAtivo || !html5QrCode){
+  if(!leitor){
     return;
   }
 
-  html5QrCode.stop()
-    .then(function(){
-      scannerAtivo = false;
-      mensagem("Scanner parado.", "info");
-    });
+  leitor.reset();
+  scannerAtivo = false;
+  mensagem("Scanner parado.", "info");
 }
 
 function processarQR(texto){
@@ -276,6 +341,10 @@ function processarQR(texto){
 
   const id = String(texto).trim();
   const token = localStorage.getItem("sigac_token_externo");
+
+  if(navigator.vibrate){
+    navigator.vibrate(120);
+  }
 
   mensagem("Registrando ID " + id + "...", "info");
 
@@ -301,6 +370,7 @@ function processarQR(texto){
 }
 
 function sair(){
+  pararScanner();
   localStorage.clear();
   location.reload();
 }
